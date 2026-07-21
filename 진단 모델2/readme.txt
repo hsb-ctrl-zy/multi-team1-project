@@ -1,1 +1,2 @@
-
+ver1, ver2 볼 필요 없이 바로 premodel2_test랑 premodel2_ver2 보시면 됩니다.
+아직 database 연결 안 해서 진단 모델3 폴더 만들수도 있습니다...
