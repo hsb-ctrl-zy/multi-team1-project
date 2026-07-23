@@ -1,13 +1,12 @@
 import json
 import os
-from collections import defaultdict
 from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
 # -------------------------------------------------------------------
-# 0. geo.env 파일 위치 지정 및 DB 엔진 설정
+# 0. geo.env 파일 위치 지정 및 환경변수 로드
 # -------------------------------------------------------------------
 CURRENT_DIR = Path(__file__).resolve().parent
 ENV_PATH = CURRENT_DIR / "geo.env"
@@ -36,16 +35,17 @@ engine = create_engine(ENGINE_URL)
 # 1. 파일별 전처리 헬퍼 함수
 # -------------------------------------------------------------------
 def process_product_csv(file_path: Path) -> pd.DataFrame:
-    """text 파일이 없을 때 실행되는 Product CSV 처리 함수 (text_contents는 빈값)"""
+    """끝이 product인 CSV 파일 처리"""
     print(f"📦 [Product CSV] Reading: {file_path.name}")
-    target_cols = ["쇼핑몰명", "대분류", "중분류", "소분류", "상품명"]
+
+    target_cols = ["성별", "대분류", "소분류", "상품명"]
 
     try:
         df = pd.read_csv(file_path, usecols=lambda c: c in target_cols)
     except UnicodeDecodeError:
         df = pd.read_csv(file_path, usecols=lambda c: c in target_cols, encoding="cp949")
 
-    cat_cols = ["대분류", "중분류", "소분류"]
+    cat_cols = ["성별", "대분류", "소분류"]
 
     def join_categories(row):
         cats = [
@@ -55,59 +55,22 @@ def process_product_csv(file_path: Path) -> pd.DataFrame:
         ]
         return " > ".join(cats)
 
-    existing_cat_cols = [c for c in cat_cols if c in df.columns]
-    product_cat = df[existing_cat_cols].apply(join_categories, axis=1) if existing_cat_cols else ""
-
-    result_df = pd.DataFrame(
-        {
-            "brand_name": df["쇼핑몰명"].astype(str).str.strip() if "쇼핑몰명" in df.columns else "",
-            "product_name": df["상품명"].astype(str).str.strip() if "상품명" in df.columns else "",
-            "product_cat": product_cat,
-            "text_contents": "",
-        }
-    )
-    print(f"   └ 완료 ({len(result_df):,}행)")
-    return result_df
-
-
-def process_text_csv(file_path: Path) -> pd.DataFrame:
-    """text 파일이 존재할 때 단독 실행되는 Text CSV 처리 함수 (본문텍스트 포함)"""
-    print(f"📝 [Text CSV] Reading: {file_path.name}")
-    target_cols = ["쇼핑몰명", "대분류", "중분류", "소분류", "상품명", "본문텍스트"]
-
-    try:
-        df = pd.read_csv(file_path, usecols=lambda c: c in target_cols)
-    except UnicodeDecodeError:
-        df = pd.read_csv(file_path, usecols=lambda c: c in target_cols, encoding="cp949")
-
-    cat_cols = ["대분류", "중분류", "소분류"]
-
-    def join_categories(row):
-        cats = [
-            str(val).strip()
-            for val in row
-            if pd.notna(val) and str(val).strip()
-        ]
-        return " > ".join(cats)
-
-    existing_cat_cols = [c for c in cat_cols if c in df.columns]
-    product_cat = df[existing_cat_cols].apply(join_categories, axis=1) if existing_cat_cols else ""
-
-    text_contents = (
-        df["본문텍스트"].fillna("").astype(str).str.strip()
-        if "본문텍스트" in df.columns
+    available_cat_cols = [c for c in cat_cols if c in df.columns]
+    product_cat = (
+        df[available_cat_cols].apply(join_categories, axis=1)
+        if available_cat_cols
         else ""
     )
 
     result_df = pd.DataFrame(
         {
-            "brand_name": df["쇼핑몰명"].astype(str).str.strip() if "쇼핑몰명" in df.columns else "",
-            "product_name": df["상품명"].astype(str).str.strip() if "상품명" in df.columns else "",
+            "brand_name": "CJ",
+            "brand_type": "대기업",
+            "product_name": df["상품명"].astype(str).str.strip(),
             "product_cat": product_cat,
-            "text_contents": text_contents,
         }
     )
-    print(f"   └ 완료 ({len(result_df):,}행)")
+    print(f"   └ 완료 ({len(result_df):,}행 | 브랜드: CJ | 유형: 대기업)")
     return result_df
 
 
@@ -120,10 +83,7 @@ def process_image_csv(file_path: Path) -> pd.DataFrame:
     except UnicodeDecodeError:
         df = pd.read_csv(file_path, encoding="cp949")
 
-    if "브랜드" in df.columns:
-        df = df.rename(columns={"브랜드": "brand_name"})
-    elif "쇼핑몰명" in df.columns:
-        df = df.rename(columns={"쇼핑몰명": "brand_name"})
+    df["brand_name"] = "CJ"
 
     col_mapping = {
         "상품명": "product_name",
@@ -135,15 +95,12 @@ def process_image_csv(file_path: Path) -> pd.DataFrame:
     df["product_name"] = df["product_name"].astype(str).str.strip()
     df["image_url"] = df["image_url"].astype(str).str.strip()
 
-    if "brand_name" in df.columns:
-        df["brand_name"] = df["brand_name"].astype(str).str.strip()
-
     print(f"   └ 완료 ({len(df):,}행)")
     return df
 
 
 def process_jl_jsonl(file_path: Path) -> dict:
-    """끝이 jl인 JSONL 파일 처리"""
+    """오직 jsonld_blocks 데이터만 가공하여 추출하는 함수"""
     print(f"📄 [JSONL] Reading: {file_path.name}")
     jsonl_dict = {}
 
@@ -151,22 +108,46 @@ def process_jl_jsonl(file_path: Path) -> dict:
         for line in f:
             if not line.strip():
                 continue
-            item = json.loads(line)
-            p_name = item.get("상품명")
-            p_jsonld = item.get("product_jsonld")
 
-            if p_name:
-                jsonl_dict[str(p_name).strip()] = p_jsonld
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            raw_p_name = item.get("상품명")
+            if not raw_p_name:
+                continue
+            p_name = str(raw_p_name).strip()
+
+            # 대기업용: jsonld_blocks 타겟팅
+            p_jsonld = item.get("jsonld_blocks")
+
+            if p_name and p_jsonld is not None:
+                jsonl_dict[p_name] = p_jsonld
 
     print(f"   └ 완료 (매핑 항목: {len(jsonl_dict):,}개)")
     return jsonl_dict
 
 
 def convert_to_json_str(val):
-    if pd.isna(val) or val is None:
+    # 1. None이거나 값 자체가 없는 경우
+    if val is None:
         return None
+
+    # 2. dict 또는 list 타입인 경우 (pd.isna 검사를 거치지 않고 바로 json 변환)
     if isinstance(val, (dict, list)):
-        return json.dumps(val, ensure_ascii=False)
+        try:
+            return json.dumps(val, ensure_ascii=False)
+        except Exception:
+            return str(val)
+
+    # 3. 단일 값(문자열, 숫자 등)에 대한 결측치(NaN) 검사
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+
     return str(val)
 
 
@@ -175,15 +156,19 @@ def convert_to_json_str(val):
 # -------------------------------------------------------------------
 def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     print("=" * 65)
-    print("🚀 전체 데이터 수집 및 DB 적재 파이프라인 시작")
+    print("🚀 전체 데이터 수집 및 DB 적재 파이프라인 시작 (대기업 전용)")
     print("=" * 65)
 
     dir_path = Path(target_directory)
-    tagged_files = defaultdict(dict)
+    product_dfs = []
+    image_dfs = []
     combined_jsonl_dict = {}
 
+    used_files = []
+    unused_data_files = []
+
     # ---------------------------------------------------------------
-    # PHASE 1: 파일 수집 및 그룹핑
+    # PHASE 1: 파일 수집 및 수집 데이터 병합
     # ---------------------------------------------------------------
     print("\n📁 [PHASE 1] 원천 파일 탐색 및 파싱 중...")
     for file_path in dir_path.rglob("*"):
@@ -194,7 +179,7 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
             continue
 
         if (
-            file_path.suffix in [".py", ".env", ".ipynb"]
+            file_path.suffix.lower() in [".py", ".env", ".ipynb"]
             or file_path.name.endswith(".env")
             or file_path.name.startswith(".")
         ):
@@ -202,37 +187,37 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
 
         file_stem = file_path.stem
         parts = file_stem.split("_")
-        file_type = parts[-1]  # product, text, image, jl
-        tag_prefix = "_".join(parts[:-1])
+        file_type = parts[-1]
+        ext = file_path.suffix.lower()
 
-        if file_type == "product" and file_path.suffix == ".csv":
-            tagged_files[tag_prefix]["product"] = file_path
-        elif file_type == "text" and file_path.suffix == ".csv":
-            tagged_files[tag_prefix]["text"] = file_path
-        elif file_type == "image" and file_path.suffix == ".csv":
-            tagged_files[tag_prefix]["image"] = file_path
-        elif file_type == "jl" and file_path.suffix in [".jsonl", ".jl"]:
+        is_data_extension = ext in [".csv", ".jsonl", ".jl", ".json"]
+
+        if file_type == "product" and ext == ".csv":
+            product_dfs.append(process_product_csv(file_path))
+            used_files.append(file_path)
+        elif file_type == "image" and ext == ".csv":
+            image_dfs.append(process_image_csv(file_path))
+            used_files.append(file_path)
+        elif file_type == "jl" and ext in [".jsonl", ".jl"]:
             combined_jsonl_dict.update(process_jl_jsonl(file_path))
+            used_files.append(file_path)
+        else:
+            if is_data_extension:
+                unused_data_files.append(file_path)
 
-    # ---------------------------------------------------------------
-    # PHASE 2: 태그별 배타적 실행 (Text가 있으면 Text만, 없으면 Product)
-    # ---------------------------------------------------------------
-    product_dfs = []
-    image_dfs = []
+    print("\n" + "-" * 65)
+    print("📁 [파일 수집 리포트]")
+    print(f"   ✅ 사용된 데이터 파일 수: {len(used_files)}개")
+    print(f"   ⚠️ 사용되지 않은 데이터 파일 수(오타/규칙 미준수): {len(unused_data_files)}개")
 
-    for tag, files in tagged_files.items():
-        if "text" in files:
-            p_df = process_text_csv(files["text"])
-            product_dfs.append(p_df)
-        elif "product" in files:
-            p_df = process_product_csv(files["product"])
-            product_dfs.append(p_df)
-
-        if "image" in files:
-            image_dfs.append(process_image_csv(files["image"]))
+    if unused_data_files:
+        print("\n   [⚠️ 스킵된 파일 목록 (파일명 확인 필요)]")
+        for uf in unused_data_files:
+            print(f"    - {uf.relative_to(dir_path)}")
+    print("-" * 65)
 
     if not product_dfs:
-        print("❌ 적재할 Product/Text 데이터가 없습니다. 파이프라인을 종료합니다.")
+        print("❌ 적재할 Product 데이터가 없습니다. 파이프라인을 종료합니다.")
         return
 
     raw_product_df = pd.concat(product_dfs, ignore_index=True)
@@ -241,49 +226,42 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     )
 
     # ---------------------------------------------------------------
-    # PHASE 2-2: raw_data_table 적재 준비
+    # PHASE 2: raw_data_table 전처리 및 DB 적재
     # ---------------------------------------------------------------
     print("\n📦 [PHASE 2] Product 데이터 전처리 & raw_data_table 적재...")
     p_df = raw_product_df.copy()
 
-    # 상품명 공백 정제
+    # 상품명 공백 정제 및 교차 중복제거
     p_df["product_name"] = p_df["product_name"].astype(str).str.strip()
 
-    # 카테고리 파일 간 상품 중복 정제
     p_before_len = len(p_df)
     p_df = p_df.drop_duplicates(subset=["product_name"], keep="first")
     p_after_len = len(p_df)
     if p_before_len != p_after_len:
-        print(f"   ⚠️ [중복 상품 정제] {p_before_len - p_after_len:,}건의 교차 중복 상품 제거됨")
+        print(f"   ⚠️ [중복 상품 정제] {p_before_len - p_after_len:,}건의 중복 상품 제거됨")
 
     # JSONL 매칭
     p_df["json_ld_contents"] = p_df["product_name"].map(combined_jsonl_dict)
     p_df["has_json_ld"] = p_df["json_ld_contents"].notna()
 
     # JSON 형변환
-    p_df["json_ld_contents"] = p_df["json_ld_contents"].apply(
-        convert_to_json_str
-    )
+    p_df["json_ld_contents"] = p_df["json_ld_contents"].apply(convert_to_json_str)
 
-    # 기본 컬럼 설정
     if "brand_type" not in p_df.columns:
-        p_df["brand_type"] = "소상공인"
+        p_df["brand_type"] = "대기업"
 
-    p_df["text_contents"] = p_df["text_contents"].fillna("").astype(str)
+    if "text_contents" not in p_df.columns or p_df["text_contents"].isnull().all():
+        p_df["text_contents"] = ""
+    else:
+        p_df["text_contents"] = p_df["text_contents"].fillna("")
 
-    # 모니터링 로그
     p_brands = p_df["brand_name"].unique().tolist()
     matched_json_count = p_df["has_json_ld"].sum()
-    text_filled_count = (p_df["text_contents"] != "").sum()
 
     print(f"   📊 Product 총 적재 행 수: {len(p_df):,}개")
     print(f"   🎯 JSON-LD 매칭 성공 수: {matched_json_count:,}개 / {len(p_df):,}개")
-    print(f"   📝 본문 텍스트 수집 수: {text_filled_count:,}개 / {len(p_df):,}개")
-    print(
-        f"   🏷️ 감지된 브랜드 ({len(p_brands)}개): {', '.join(map(str, img_brands))}"
-    )
+    print(f"   🏷️ 지정된 브랜드: {', '.join(map(str, p_brands))}")
 
-    # raw_data_table DB 적재
     try:
         raw_target_cols = [
             "brand_name",
@@ -316,7 +294,6 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
 
     print("\n🖼️ [PHASE 3] Image 데이터 전처리 & image_data_table 적재...")
 
-    # DB에서 방금 적재된 page_id 가져오기
     query = "SELECT page_id, brand_name, product_name FROM raw_data_table"
     product_id_df = pd.read_sql(query, con=engine)
 
@@ -324,7 +301,7 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     raw_total_cnt = len(img_df)
     print(f"   📊 [1] 원천 이미지 파일 총 행 수: {raw_total_cnt:,}건")
 
-    # alt 관련 컬럼 매핑
+    # alt 컬럼 리네임
     alt_rename_map = {}
     if "alt속성존재여부" in img_df.columns:
         alt_rename_map["alt속성존재여부"] = "has_alt"
@@ -334,22 +311,12 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     if alt_rename_map:
         img_df = img_df.rename(columns=alt_rename_map)
 
-    # 공백 정제
+    # 문자열 정제 및 page_id 매칭
     img_df["product_name"] = img_df["product_name"].astype(str).str.strip()
     product_id_df["product_name"] = product_id_df["product_name"].astype(str).str.strip()
 
-    if "brand_name" in img_df.columns:
-        img_df["brand_name"] = img_df["brand_name"].astype(str).str.strip()
-    product_id_df["brand_name"] = product_id_df["brand_name"].astype(str).str.strip()
-
-    # page_id 매칭
     page_map = product_id_df.drop_duplicates(subset=["product_name"]).set_index("product_name")["page_id"].to_dict()
-    brand_map = product_id_df.drop_duplicates(subset=["product_name"]).set_index("product_name")["brand_name"].to_dict()
-
     img_df["page_id"] = img_df["product_name"].map(page_map)
-
-    if "brand_name" not in img_df.columns or img_df["brand_name"].isnull().all():
-        img_df["brand_name"] = img_df["product_name"].map(brand_map)
 
     missing_page_id_cnt = img_df["page_id"].isnull().sum()
     if missing_page_id_cnt > 0:
@@ -358,7 +325,7 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     img_db_df = img_df.dropna(subset=["page_id"]).copy()
     img_db_df["page_id"] = img_db_df["page_id"].astype(int)
 
-    # 미수집/기본 컬럼 정제
+    # 기본 컬럼 정제
     if "image_text" not in img_db_df.columns or img_db_df["image_text"].isnull().all():
         img_db_df["image_text"] = ""
     else:
@@ -375,7 +342,7 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     else:
         img_db_df["alt_contents"] = None
 
-    # 타겟 컬럼 순서 맞추기
+    # 타겟 컬럼 정리
     img_target_cols = [
         "page_id",
         "brand_name",
@@ -387,7 +354,7 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     ]
     img_db_df = img_db_df[[c for c in img_target_cols if c in img_db_df.columns]]
 
-    # 복합키 (page_id, image_sequence) 중복 제거
+    # (page_id, image_sequence) 복합키 기준 중복 제거
     before_len = len(img_db_df)
     img_db_df = img_db_df.drop_duplicates(
         subset=["page_id", "image_sequence"], keep="first"
@@ -397,7 +364,6 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
     if before_len != after_len:
         print(f"   ⚠️ [3] 중복 이미지 순서 데이터 정제됨: {before_len - after_len:,}건")
 
-    # DB 적재
     img_brands = img_db_df["brand_name"].unique().tolist()
     print(f"   🚀 [최종 DB 적재 대상] Image 총 행 수: {len(img_db_df):,}개")
     print(f"   🏷️ 이미지 브랜드 ({len(img_brands)}개): {', '.join(map(str, img_brands))}")
@@ -415,6 +381,13 @@ def run_full_pipeline(target_directory: Path = CURRENT_DIR):
         print(f"   ❌ image_data_table 적재 실패: {e}")
         return
 
+    print("\n" + "=" * 65)
+    print("🎉 모든 데이터 적재 파이프라인 완료!")
+    print("=" * 65)
 
+
+# -------------------------------------------------------------------
+# 3. 파이프라인 실행
+# -------------------------------------------------------------------
 if __name__ == "__main__":
     run_full_pipeline()
