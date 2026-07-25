@@ -356,7 +356,7 @@ class GEOScorer:
     # ⑤ 이미지 Alt 속성 평가 (기획안 완벽 반영)
     # ==========================================
     
-    # ⑤-1. 단일 이미지 평가 (기획안 4개 항목 + 스터핑 ETM/EC 규칙 반영)
+    # ⑤-1. 단일 이미지 평가 (기획안 3개 항목 + 스터핑 ETM/EC 규칙 반영)
     def evaluate_single_alt(self, alt_text: str, is_text_image: bool) -> SingleAltEvaluationResult:
         if alt_text is None:
             return SingleAltEvaluationResult(
@@ -365,14 +365,14 @@ class GEOScorer:
                 s2_relevance_score=0.0, s3_sentence_score=0.0
             )
 
-        s1 = 0.25
+        s1 = 0.33
         clean_alt = self._clean_text(alt_text)
 
         # 2. 적절성 평가
         if not is_text_image:
-            s2 = 0.25 if clean_alt == "" else 0.0
+            s2 = 0.33 if clean_alt == "" else 0.0
         else:
-            s2 = 0.25 if len(clean_alt) >= 10 else 0.0
+            s2 = 0.33 if len(clean_alt) >= 10 else 0.0
 
         if clean_alt == "":
             return SingleAltEvaluationResult(
@@ -416,11 +416,11 @@ class GEOScorer:
             has_verb_or_modifier = len(verbs_adjs_modifiers) > 0
 
             if has_josa and has_verb_or_modifier:
-                s3 = 0.25
+                s3 = 0.34
             elif has_verb_or_modifier and not has_josa:
-                s3 = 0.16
+                s3 = 0.22
             elif has_josa and not has_verb_or_modifier:
-                s3 = 0.08
+                s3 = 0.11
             else:
                 s3 = 0.0
 
