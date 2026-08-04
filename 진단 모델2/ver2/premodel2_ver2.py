@@ -60,7 +60,6 @@ class SingleAltEvaluationResult:
     s2_relevance_score: float    # 2. 적절성 점수 (0.0 or 0.25)
     s3_sentence_score: float     # 3. 문장 완성도 점수 (0.0, 0.08, 0.16, 0.25)
 
-
 @dataclass
 class ImageAltEvaluationResult:
     avg_score: float             # Threshold(0.2) 적용 후 최종 평균 점수
@@ -95,12 +94,17 @@ class GEOScorer:
         return re.sub(r'\s+', ' ', text).strip()
 
     # ① 본문 텍스트 비율 (Text Ratio)
-    def calculate_text_ratio(self, body_text_len: int, image_text_len: int) -> float:
-        total = body_text_len + image_text_len
+    def calculate_text_ratio(self, body_text: str, image_text: str) -> float:
+        clean_body = self._clean_text(body_text)
+        clean_image = self._clean_text(image_text)
+
+        body_len = len(clean_body)
+        image_len = len(clean_image)
+        total = body_len + image_len
         if total == 0:
             return 0.0
         
-        ratio = body_text_len / total
+        ratio = body_len / total
         return ratio if ratio >= 0.2 else 0.0
     
     # ==========================================
@@ -456,21 +460,20 @@ class GEOScorer:
     # 🏆 [통합 메인 함수] 모든 평가를 한 번에 실행하고 종합 점수 산출
     def evaluate_page(
         self,
-        page_text: str,
+        body_text: str,
+        image_text: str,
         user_queries: Union[str, List[str]],
-        image_text_len: int = 0,
         json_ld_str: str = "",
         image_list: List[Dict[str, Any]] = None
     ) -> GEOTotalEvaluationResult:
         
         if image_list is None:
             image_list = []
+        # 전체 페이지 텍스트 = 본문 텍스트 + 이미지 텍스트
+        page_text = f"{body_text} {image_text}".strip()
 
         # 1. 각 평가 항목 실행
-        s1 = self.calculate_text_ratio(
-            body_text_len=len(self._clean_text(page_text)), 
-            image_text_len=image_text_len
-        )
+        s1 = self.calculate_text_ratio(body_text=body_text, image_text=image_text)
         s2 = self.calculate_hybrid_search(user_queries=user_queries, page_text=page_text)
         s3 = self.calculate_keyword_stuffing(page_text=page_text)
         s4 = self.calculate_json_ld_score(json_ld_str=json_ld_str)
