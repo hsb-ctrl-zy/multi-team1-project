@@ -84,29 +84,56 @@ class GEOScorer:
         return round(final_score, 2)
 
     # ==========================================
-    # ③ 본문 키워드 스터핑 (Keyword Stuffing)
+    # ③ 키워드 스터핑(Keyword Stuffing) 검출 (3가지 영역 균등 배분 모델)
     # ==========================================
     def calculate_keyword_stuffing(self, page_text: str) -> float:
         clean_page = self._clean_text(page_text)
         if not clean_page:
-            return 1.0
+            return 0.0
 
-        nouns = komoran.nouns(clean_page)
-        total_nouns = len(nouns)
+        pos_tags = komoran.pos(clean_page)
+        if not pos_tags:
+            return 0.0
+
+        total_tokens = len(pos_tags)
+
+        # 1. 태그별 형태소 추출
+        nouns = [word for word, tag in pos_tags if tag.startswith('N')]        # 명사(N)
+        particles = [word for word, tag in pos_tags if tag.startswith('J')]    # 조사(J)
+        endings = [word for word, tag in pos_tags if tag.startswith('E')]      # 어미(E)
+
+        noun_ratio = len(nouns) / total_tokens
+        grammatical_ratio = (len(particles) + len(endings)) / total_tokens
+
+        # 2. 감점 항목 계산 (각 영역별 최대 0.333 감점)
         
-        if total_nouns == 0:
-            return 1.0
+        # [영역 1] 명사 비율 감점 (기준: 50% 초과 시 초과분에 비례하여 감점)
+        noun_penalty = 0.0
+        if noun_ratio > 0.5:
+            # 50%~100% 구간을 0.0~0.333 감점으로 매핑
+            noun_penalty = min(0.333, ((noun_ratio - 0.5) / 0.5) * 0.333)
 
-        counts = Counter(nouns).most_common(3)
-        
-        max_noun_count = counts[0][1] if len(counts) >= 1 else 0
-        top3_sum_count = sum([c[1] for c in counts])
+        # [영역 2] 문법 요소 미비 감점 (기준: 조사/어미 비율 20% 미만 시 부족분에 비례하여 감점)
+        grammatical_penalty = 0.0
+        if grammatical_ratio < 0.2:
+            # 0%~20% 구간의 부족분을 0.0~0.333 감점으로 매핑
+            grammatical_penalty = min(0.333, ((0.2 - grammatical_ratio) / 0.2) * 0.333)
 
-        max_noun_ratio = max_noun_count / total_nouns
-        top3_density = top3_sum_count / total_nouns
+        # [영역 3] 특정 접미 패턴 반복 감점 (기준: ~룩, ~핏 등 2회 이상부터 감점)
+        pattern_count = sum(1 for n in nouns if n.endswith('룩') or n.endswith('핏'))
+        pattern_penalty = 0.0
+        if pattern_count >= 2:
+            # 2회~5회 이상 구간을 0.0~0.333 감점으로 매핑
+            pattern_penalty = min(0.333, ((pattern_count - 1) / 4) * 0.333)
 
-        stuffing_score = 1.0 - (max_noun_ratio * 0.5 + top3_density * 0.5)
-        return stuffing_score if stuffing_score >= 0.6 else 0.0
+        # 3. 최종 점수 계산 (기본 1.0 - 총 감점액)
+        total_penalty = noun_penalty + grammatical_penalty + pattern_penalty
+        raw_score = max(0.0, 1.0 - total_penalty)
+
+        # 4. Threshold 적용: 0.6 미만은 스터핑(어뷰징)으로 간주하여 0.0 반환
+        final_score = round(raw_score, 2) if raw_score >= 0.6 else 0.0
+
+        return final_score
 
     # ==========================================
     # ④ JSON-LD 구조화 데이터 평가
