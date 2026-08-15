@@ -35,6 +35,9 @@ MODEL_NAME = "모델명을_여기에_입력하세요"  # 예: gemma-4-12b-it
 # 주의: 무리 가지 않는 선에서 조절 (초기 세팅: 10개)
 ITEMS_PER_BRAND_TYPE = 5 
 
+# 한 평가 기준(콤보)당 평가할 총 질문 개수
+MAX_EVAL_QUESTIONS = 5
+
 # ==========================================
 # 2. DB 검색 보조 함수 (필수 키워드 및 옵션 가산점 적용)
 # ==========================================
@@ -102,10 +105,9 @@ def main():
     
     try:
         with connection.cursor() as cursor:
-            # 1. 소비자 질문을 랜덤으로 섞어서 5개만 가져오기
-            cursor.execute("SELECT * FROM question_table LIMIT 5")
+            # 1. 수백 개의 질문 중 무작위로 가져오기 (나중에 MAX_EVAL_QUESTIONS 만큼 자름)
+            cursor.execute("SELECT * FROM question_table ORDER BY RAND()")
             questions = list(cursor.fetchall())
-            random.shuffle(questions)
             
             for combo_key, system_prompt in eval_prompts.items():
                 if combo_key == "_comment":
@@ -129,7 +131,7 @@ def main():
                         existing_df = pd.read_csv(output_path)
                         # 에러난 항목 제외하고 정상 결과만 유지
                         valid_existing = existing_df[~existing_df['evaluation_result'].astype(str).str.startswith("ERROR:", na=False)]
-                        processed_query_ids = set(valid_existing['query_id'].tolist())
+                        processed_query_ids = set(str(x) for x in valid_existing['query_id'].tolist())
                         results = valid_existing.to_dict('records')
                         if len(processed_query_ids) > 0:
                             print(f"👉 [{output_filename}] 이전에 처리된 {len(processed_query_ids)}개의 데이터를 불러와 이어서 진행합니다.")
@@ -137,7 +139,15 @@ def main():
                         print(f"기존 파일을 읽는 중 오류가 발생했습니다. 새로 시작합니다: {e}")
                         
                 # 아직 처리 안 된 질문들만 필터링 (이어하기 위함)
-                target_questions = [q for q in questions if q['query_id'] not in processed_query_ids]
+                target_questions = [q for q in questions if str(q['query_id']) not in processed_query_ids]
+                
+                # 목표 개수(MAX_EVAL_QUESTIONS)까지만 잘라서 진행 (무한 증식 방지)
+                needed_count = MAX_EVAL_QUESTIONS - len(processed_query_ids)
+                if needed_count <= 0:
+                    print(f"✅ 해당 기준은 이미 {MAX_EVAL_QUESTIONS}개의 평가가 완료되었습니다. 건너뜁니다.")
+                    continue
+                    
+                target_questions = target_questions[:needed_count]
                 
                 for q in tqdm(target_questions, desc="질문 처리 중"):
                     q_id = q['query_id']
@@ -150,6 +160,16 @@ def main():
                     corp_products = fetch_products(cursor, q_cat, q_keywords, q_options, '대기업', ITEMS_PER_BRAND_TYPE)
                     small_products = fetch_products(cursor, q_cat, q_keywords, q_options, '소상공인', ITEMS_PER_BRAND_TYPE)
                     all_candidates = corp_products + small_products
+                    
+                    if not all_candidates:
+                        # 조건에 맞는 상품이 하나도 없는 경우 AI를 호출하지 않고 에러 처리
+                        results.append({
+                            "query_id": q_id,
+                            "query_text": q_text,
+                            "input_page_ids": "",
+                            "evaluation_result": "ERROR: 검색된 후보 상품이 없습니다."
+                        })
+                        continue
                     
                     # 3. 데이터 포맷팅
                     candidate_str_list = []
