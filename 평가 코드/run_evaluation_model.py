@@ -11,11 +11,11 @@ from tqdm import tqdm
 # ==========================================
 # MySQL 데이터베이스 접속 정보
 DB_CONFIG = {
-    'host': '211.212.230.86',
-    'user': 'teamuser',
-    'password': '1638',
-    'database': 'geo_db',
-    'port': 3306,
+    'host': '',
+    'user': '',
+    'password': '',
+    'database': '',
+    'port': ,
     'cursorclass': pymysql.cursors.DictCursor
 }
 
